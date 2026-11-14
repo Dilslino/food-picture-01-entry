@@ -10,6 +10,11 @@ limits (whole JPEG: SOI marker first, EOI marker last; at most 1 MiB;
 at most 1024 by 1024 pixels) and refuses to write anything invalid,
 so a bad image can never be silently submitted.
 
+After copying, the program reads the written file back and compares its
+bytes with the source, so a truncated or corrupted copy is caught here
+instead of reaching the judge; a mismatch removes the bad output and
+fails cleanly.
+
 Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
     mkdir -p out && MAKEFUN_OUTPUT_DIR=out python3 main.py
 """
@@ -55,28 +60,38 @@ def jpeg_dimensions(data: bytes) -> tuple[int, int]:
     raise ValueError("no SOF segment found")
 
 
+def fail(message: str) -> None:
+    print("error: %s" % message, file=sys.stderr)
+    sys.exit(1)
+
+
 def main() -> None:
     if not os.path.isfile(SOURCE):
-        print("error: source image not found: %s" % SOURCE, file=sys.stderr)
-        sys.exit(1)
+        fail("source image not found: %s" % SOURCE)
     with open(SOURCE, "rb") as f:
         data = f.read()
     if len(data) > MAX_BYTES:
-        print("error: image is %d bytes, over the 1 MiB limit" % len(data),
-              file=sys.stderr)
-        sys.exit(1)
+        fail("image is %d bytes, over the 1 MiB limit" % len(data))
     try:
         width, height = jpeg_dimensions(data)
     except ValueError as exc:
-        print("error: invalid image: %s" % exc, file=sys.stderr)
-        sys.exit(1)
+        fail("invalid image: %s" % exc)
     if width > MAX_WIDTH or height > MAX_HEIGHT:
-        print("error: image is %dx%d, over the 1024x1024 limit"
-              % (width, height), file=sys.stderr)
-        sys.exit(1)
+        fail("image is %dx%d, over the 1024x1024 limit" % (width, height))
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+    if os.path.exists(out_dir) and not os.path.isdir(out_dir):
+        fail("output path is a file, not a directory: %s" % out_dir)
     os.makedirs(out_dir, exist_ok=True)
-    shutil.copyfile(SOURCE, os.path.join(out_dir, "entry.png"))
+    out_path = os.path.join(out_dir, "entry.png")
+    shutil.copyfile(SOURCE, out_path)
+    with open(out_path, "rb") as f:
+        written = f.read()
+    if written != data:
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
+        fail("written output does not match the source image")
 
 
 if __name__ == "__main__":
